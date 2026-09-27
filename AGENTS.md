@@ -1,6 +1,29 @@
 # AGENTS.md
 
-How this repo is put together, and how to regenerate it.
+Salt (https://saltapp.ai) is end-to-end encrypted chat where humans and AI
+agents are equal contacts. This file covers how this repo -- Salt's Go SDK --
+is put together, and how to regenerate it.
+
+## Commands
+
+Verified in this checkout (Go 1.24, module at tag `v0.1.0`):
+
+```sh
+go build ./...   # compiles the root package, internal/saltapp, and smoke/
+go vet ./...     # == make vet
+gofmt -l .       # == make fmt; prints nothing when the tree is clean
+go test ./...    # == make test; httptest-based unit tests, no network access
+```
+
+Install as a dependency:
+
+```sh
+go get github.com/0000F8/saltapp-go@v0.1.0
+```
+
+(see "Publishing" below for why that already works today with no separate
+registry step). `make generate` and `make smoke` are covered in their own
+sections further down, since both do more than run a single tool.
 
 ## Layout
 
@@ -20,6 +43,9 @@ How this repo is put together, and how to regenerate it.
   `errors.go`, `doc.go`) -- the small, hand-written, idiomatic layer callers
   actually use: `saltapp.New`, `PostCard`/`GetCard`/`WaitForTap`,
   `SendPlainMessage`, `RegisterAgent`, `APIError`.
+- `generate.go` -- a package-level `//go:generate` pair mirroring the
+  Makefile's `generate` target exactly (same two oapi-codegen invocations),
+  so `go generate ./...` works as an alternative to `make generate`.
 - `smoke/` -- a `go run ./smoke` live check against production (see below).
   Not part of the public API.
 - `*_test.go` at the root -- `httptest.Server`-based unit tests for the
@@ -93,6 +119,57 @@ register an agent). To wrap another endpoint:
    OpenAPI document's schema for that endpoint -- copy field names/types
    from `openapi.json`, never invent a shape.
 
+## Rules that bite
+
+Cross-repo facts that have already cost other Salt SDKs real debugging time.
+This SDK gets each one right today; keep it that way as it grows.
+
+- **A tool waiting for a human's answer to a card polls its OWN card, never
+  the agent outbox.** `GetCard`'s `after` reads one card's own interaction
+  history; `GET /api/v1/agent/updates` is a completely different thing --
+  exactly ONE forward-only cursor per agent, shared with every other consumer
+  of that agent's socket-mode deliveries. Any `after=` passed to the outbox
+  permanently advances that shared ack, silently cutting off another
+  consumer's backlog. `WaitForTap` (`cards.go`) is confirmed correct: it
+  loops on `c.GetCard(ctx, cardID, after)` with the caller's `after` threaded
+  through unchanged on every poll, and never touches
+  `GET /api/v1/agent/updates` at all. If you add a second way to wait on a
+  card, make it call `GetCard` too.
+- **`POST /api/v1/cards` responds referencing the chat MESSAGE it created,
+  never a top-level `id`.** The response is the `Message` schema:
+  `message_id` (the bubble) and `resource_id` (the card itself). `PostCard`
+  already reads `msg.MessageId`/`msg.ResourceId` and nothing else -- a
+  top-level `id` on that response doesn't exist and never has.
+- **A chat's `encrypted` flag lives nested under `session`, not top-level.**
+  Per `openapi.json`, `ChatSession.encrypted` (the `session` key inside
+  `GET/POST /api/v1/chats` and `chats#show`/`#previous`) is a different field
+  from `Message.encrypted` (top-level on the `Message` schema, the response
+  to `POST /api/v1/messages`). `SendPlainMessage` only ever sets the latter
+  (`CreateMessageJSONRequestBody.Encrypted`) -- if this SDK ever wraps
+  `GET /api/v1/chats/:id` to check whether a chat is encrypted before
+  sending, read it off the nested session object, not a top-level field on
+  the chat.
+- **Since salt-api 0.98.1, an encrypted chat refuses a non-PGP-armored
+  message body.** This repo's committed `openapi.json` is pinned to salt-api
+  0.98.0 (see `SOURCE`), whose `createMessage` description only documents
+  the older, coarser refusal this SDK's own test already covers
+  (`TestSendPlainMessage_SurfacesEncryptedRoomRefusal`: explicit
+  `encrypted:false` against an already-encrypted chat -> 422). Anyone adding
+  PGP support here later should re-pull `openapi.json` first and re-check
+  `createMessage`'s current description for the armored-body rule before
+  assuming the old refusal text is still the only one that applies.
+- **Test fakes must model salt-api's ACTUAL controller response shape, not
+  the calling code's assumption.** This exact bug -- a unit test's fake
+  server returning what the client code expects rather than what salt-api
+  actually sends -- shipped identically in five downstream adapters. This
+  repo already does it right and should keep doing it: `cards_test.go`'s
+  `messageFixture`/`cardResourceFixture` and `messages_test.go`'s response
+  map are each built directly from `openapi.json`'s `Message`/`CardResource`
+  schemas (see the comment above each fixture citing the schema), never from
+  what `PostCard`/`GetCard`/`SendPlainMessage` merely expect back. Any new
+  fixture follows the same rule: copy the shape from `openapi.json`, then
+  write the assertions.
+
 ## The `smoke/` command
 
 `go run ./smoke` (or `make smoke`) runs a live check against production
@@ -133,6 +210,25 @@ agent(s)`. The workaround used to close out this SDK's own smoke run
 be fully deleted anyway, but it's a real gap worth fixing at the source:
 `AccountPurge#validate!`'s `owned_agents` check should not count an account
 as owning itself. That fix belongs in salt-api, not here.
+
+## Where the truth is
+
+- OpenAPI source: https://saltapp.ai/api/openapi.json -- this repo's
+  `openapi.json` should always match it byte-for-byte (see `SOURCE`).
+- Agent-facing docs: https://saltapp.ai/agents.md
+- Hosted remote MCP server (a different, higher-level way to reach the same
+  API as a tool-calling agent, rather than a Go import): https://mcp.saltapp.ai/mcp
+- Client-by-client MCP setup matrix, in the sibling salt-mcp repo:
+  `docs/CLIENTS.md`.
+
+## Publishing
+
+Go modules resolve directly from the GitHub repo and its tags -- there is no
+separate registry publish step the way there is for Salt's npm and PyPI
+SDKs. `go get github.com/0000F8/saltapp-go@v0.1.0` (`v0.1.0` is the latest
+tag in this repo as of this writing -- check `git tag` before assuming that
+stays current) already works today with no action needed beyond pushing the
+tag to GitHub.
 
 ## What this SDK deliberately does not do
 
