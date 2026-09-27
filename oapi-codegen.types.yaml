@@ -1,0 +1,8 @@
+# oapi-codegen config for the generated model (types) file.
+# Regenerate with `make generate` (see AGENTS.md).
+package: saltapp
+output: internal/saltapp/types.gen.go
+generate:
+  models: true
+output-options:
+  skip-prune: false

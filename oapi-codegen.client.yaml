@@ -1,0 +1,8 @@
+# oapi-codegen config for the generated HTTP client file.
+# Regenerate with `make generate` (see AGENTS.md).
+package: saltapp
+output: internal/saltapp/client.gen.go
+generate:
+  client: true
+output-options:
+  skip-prune: false

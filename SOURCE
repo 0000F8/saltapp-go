@@ -1,0 +1,15 @@
+openapi.json is committed verbatim (byte-for-byte, no downgrade) from:
+
+  repo:    salt-api
+  commit:  69dfd72abd1f0bd50f18dfd51e1b533c36e65af8
+  path:    public/openapi.json
+  url:     https://saltapp.ai/api/openapi.json
+  version: 0.98.0 (the salt-api release that generated it, per info.version)
+
+oapi-codegen v2 (github.com/oapi-codegen/oapi-codegen/v2) consumed this OpenAPI
+3.1 document with no preprocessing: its use of `"type": ["string", "null"]`
+nullable unions and `const` discriminators built and compiled cleanly against
+oapi-codegen v2.8.0. No downgrade script exists in this repo; if a future
+salt-api release adds a 3.1 construct oapi-codegen v2 cannot consume, add a
+preprocessing script here (documented in AGENTS.md) rather than hand-editing
+this file -- it should always match the URL above byte-for-byte.
