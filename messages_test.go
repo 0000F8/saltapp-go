@@ -100,3 +100,38 @@ func TestSendPlainMessage_SurfacesEncryptedRoomRefusal(t *testing.T) {
 		t.Errorf("Messages = %#v", apiErr.Messages)
 	}
 }
+
+// Send guard (KEY_RESET_DESIGN.md 7): this SDK only sends plaintext to open rooms, so there are no recipient keys to fingerprint and
+// the body carries no guard fields. A 409 stale_recipient_keys (only an encrypted chat can answer it) is surfaced once and never retried.
+func TestSendPlainMessage_HasNoRecipientKeysToGuardAndDoesNotRetryAStaleRefusal(t *testing.T) {
+	calls := 0
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{"error": "stale", "code": "stale_recipient_keys", "stale": []string{"u2"}})
+	}))
+	defer srv.Close()
+
+	client, err := saltapp.New("test-key", saltapp.WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SendPlainMessage(context.Background(), "11111111-2222-3333-4444-555555555555", "hi")
+	var apiErr *saltapp.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("err = %v, want *APIError 409", err)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (no retry)", calls)
+	}
+	for _, k := range []string{"recipient_fingerprints", "sender_fingerprint"} {
+		if _, ok := gotBody[k]; ok {
+			t.Errorf("plain message carried %s", k)
+		}
+	}
+}

@@ -242,3 +242,11 @@ tag to GitHub.
   through the generated client if you need them today (it's `internal`, so
   that means vendoring this repo or asking for a typed helper); the
   hand-written layer only grows to cover what real callers actually need.
+
+## Send guard (KEY_RESET_DESIGN.md section 7)
+
+Salt's `recipient_fingerprints` / `sender_fingerprint` guard covers messages encrypted to chat members' keys. This SDK
+has no PGP, so its only send, `SendPlainMessage`, goes to open rooms and has no recipient keys to fingerprint: it sends
+neither field, and a 409 `{code: "stale_recipient_keys"}` (only an encrypted chat answers it) comes back as an
+`*APIError` with status 409, never retried. If an encrypted send is ever added here it must read the members at send time,
+send both fields (upper-case `public_fingerprint` by user id, and the sender's own), and re-encrypt ONCE on that 409.
